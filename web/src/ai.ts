@@ -38,9 +38,10 @@ const base64 = (b: Blob) =>
 
 // One segment at a time so only one decoded 5-minute WAV (~10 MB) is in memory.
 // shortcut: a failure restarts all segments on retry, cache finished transcripts if long recordings fail often
-export async function transcribe(key: string, segments: Blob[]): Promise<string> {
+export async function transcribe(key: string, segments: Blob[], onProgress?: (done: number) => void): Promise<string> {
   const parts: string[] = []
   for (const s of segments) {
+    onProgress?.(parts.length)
     const data = await base64(await toWav(s))
     parts.push(
       await chat(key, TRANSCRIBE_MODEL, [

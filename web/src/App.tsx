@@ -1,5 +1,6 @@
-import { useRef, useState } from 'react'
-import { AppShell, MobileHeader, IconButton, Button, Stack, Container, Field, Input, PasswordInput, Textarea, Select, Alert, Text, Heading, Spinner } from '@damage-control/ui'
+import { useEffect, useRef, useState } from 'react'
+import { AppShell, MobileHeader, IconButton, Button, Stack, Container, Field, Input, PasswordInput, Textarea, NativeSelect, SegmentedControl, Alert, Text, Window, Led, Progress, ConfirmDialog, Logo, useToast } from '@damage-control/ui'
+import logo from '@damage-control/ui/assets/dc-logo.png'
 import { LogOut, Mic, Square, FileText, ListChecks, Users, Languages } from 'lucide-react'
 import * as auth from './auth.ts'
 import { formatNote, transcribe, translate, Unauthorized } from './ai.ts'
@@ -12,14 +13,14 @@ const MODES: { mode: Mode; label: string; icon: typeof Mic }[] = [
   { mode: 'task', label: 'Taak', icon: ListChecks },
   { mode: 'meeting', label: 'Meeting', icon: Users },
 ]
-const PRIO_OPTIONS = PRIOS.map((p) => ({ value: p, label: p }))
+const label = (m: Mode) => MODES.find((x) => x.mode === m)!.label
 
 // Ask is hidden until the backend exists; server/ask.ts is the reference for it.
 type View =
   | { name: 'login' }
-  | { name: 'home'; saved?: string }
-  | { name: 'recording'; mode: Mode }
-  | { name: 'processing'; mode: Mode; audio: Blob[] }
+  | { name: 'home' }
+  | { name: 'recording'; mode: Mode; since: number }
+  | { name: 'processing'; mode: Mode; audio: Blob[]; done: number }
   | { name: 'review'; draft: Draft }
 
 export function App() {
@@ -27,31 +28,34 @@ export function App() {
   const [view, setView] = useState<View>(() => ({ name: session ? 'home' : 'login' }))
   const [error, setError] = useState('')
   const rec = useRef<Awaited<ReturnType<typeof startRecording>> | null>(null)
+  const toast = useToast()
 
   const logout = () => (auth.logout(), setSession(null), setView({ name: 'login' }))
   // a key that OpenRouter rejects sends us back to the login screen
   const guard = (e: unknown) => (e instanceof Unauthorized ? logout() : setError((e as Error).message))
+  const discard = () => (setError(''), setView({ name: 'home' }))
 
   const start = async (mode: Mode) => {
     setError('')
     try {
       rec.current = await startRecording()
-      setView({ name: 'recording', mode })
+      setView({ name: 'recording', mode, since: Date.now() })
     } catch {
       setError('Geen toegang tot de microfoon. Sta die toe in de instellingen van je browser.')
     }
   }
   const upload = async (mode: Mode, audio: Blob[]) => {
     setError('')
-    setView({ name: 'processing', mode, audio })
+    setView({ name: 'processing', mode, audio, done: 0 })
     try {
       if (!audio.length) throw new Error('Er is niets opgenomen')
-      const transcript = await transcribe(session!.key, audio)
+      const transcript = await transcribe(session!.key, audio, (done) => setView({ name: 'processing', mode, audio, done }))
+      setView({ name: 'processing', mode, audio, done: audio.length })
       setView({ name: 'review', draft: await formatNote(session!.key, mode, transcript) })
     } catch (e) {
       guard(e)
       // keep the audio in the processing view so the user can retry
-      if (!(e instanceof Unauthorized)) setView({ name: 'processing', mode, audio })
+      if (!(e instanceof Unauthorized)) setView({ name: 'processing', mode, audio, done: 0 })
     }
   }
   const stop = async () => view.name === 'recording' && upload(view.mode, await rec.current!.stop())
@@ -73,39 +77,48 @@ export function App() {
           {error && <Alert tone="danger" onDismiss={() => setError('')}>{error}</Alert>}
 
           {view.name === 'home' && (
-            <Stack gap={6}>
-              {view.saved && <Alert tone="success">Naar Obsidian gestuurd als {view.saved}</Alert>}
-              <Heading level={2}>Wat wil je vastleggen?</Heading>
-              {MODES.map(({ mode, label, icon: Icon }) => (
-                <Button key={mode} block size="lg" icon={<Icon aria-hidden />} onClick={() => start(mode)}>{label}</Button>
-              ))}
-            </Stack>
+            <Window path={['Notes', 'Nieuw']}>
+              <Stack gap={6}>
+                <Text>Wat wil je vastleggen?</Text>
+                {MODES.map(({ mode, label, icon: Icon }) => (
+                  <Button key={mode} block size="lg" icon={<Icon aria-hidden />} onClick={() => start(mode)}>{label}</Button>
+                ))}
+              </Stack>
+            </Window>
           )}
 
           {view.name === 'recording' && (
-            <Stack gap={6}>
-              <Heading level={2}>Aan het opnemen</Heading>
-              <Text>Praat maar. Druk op stop als je klaar bent.</Text>
-              <Button block size="lg" variant="danger" icon={<Square aria-hidden />} onClick={stop}>Stop</Button>
-            </Stack>
+            <Window path={['Notes', label(view.mode)]}>
+              <Stack gap={6}>
+                <Led tone="danger" pulse label={<>Opname loopt · <Elapsed since={view.since} /></>} />
+                <Text>Praat maar. Druk op stop als je klaar bent.</Text>
+                <Button block size="lg" variant="danger" icon={<Square aria-hidden />} onClick={stop}>Stop</Button>
+              </Stack>
+            </Window>
           )}
 
           {view.name === 'processing' && (
-            <Stack gap={6}>
-              {error ? (
-                <Button block onClick={() => upload(view.mode, view.audio)}>Opnieuw proberen</Button>
-              ) : (
-                <><Spinner /><Text>Bezig met uitschrijven…</Text></>
-              )}
-              <Button block variant="ghost" onClick={() => (setError(''), setView({ name: 'home' }))}>Weggooien</Button>
-            </Stack>
+            <Window path={['Notes', label(view.mode)]}>
+              <Stack gap={6}>
+                {error ? (
+                  <Button block variant="accent" onClick={() => upload(view.mode, view.audio)}>Opnieuw proberen</Button>
+                ) : view.done < view.audio.length ? (
+                  <Progress value={view.done} max={view.audio.length} label={`Uitschrijven: deel ${view.done + 1} van ${view.audio.length}`} />
+                ) : (
+                  <Progress label="Notitie opmaken" />
+                )}
+                <Discard what="opname" onConfirm={discard} />
+              </Stack>
+            </Window>
           )}
 
           {view.name === 'review' && (
             <Review
               draft={view.draft}
-              onCancel={() => setView({ name: 'home' })}
-              onSave={(d, vault) => toObsidian(vault, d).then((path) => setView({ name: 'home', saved: path }), guard)}
+              onCancel={discard}
+              onSave={(d, vault) =>
+                toObsidian(vault, d).then((path) => (toast({ title: 'Naar Obsidian gestuurd', description: path, tone: 'success' }), setView({ name: 'home' })), guard)
+              }
               onShare={(d) => shareFile(d).catch(guard)}
               onTranslate={(d) => (setError(''), translate(session.key, d).catch(guard))}
             />
@@ -113,6 +126,31 @@ export function App() {
         </Stack>
       </Container>
     </AppShell>
+  )
+}
+
+function Elapsed({ since }: { since: number }) {
+  const [now, setNow] = useState(Date.now)
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [])
+  const s = Math.max(0, Math.floor((now - since) / 1000))
+  return <>{Math.floor(s / 60)}:{String(s % 60).padStart(2, '0')}</>
+}
+
+// Throwing away a recording or draft cannot be undone, so it always asks first.
+function Discard({ what, onConfirm }: { what: string; onConfirm: () => void }) {
+  return (
+    <ConfirmDialog
+      title={`${what[0].toUpperCase()}${what.slice(1)} weggooien?`}
+      description={`De ${what} is daarna weg en komt niet in Obsidian.`}
+      confirmLabel="Weggooien"
+      cancelLabel="Annuleren"
+      danger
+      onConfirm={onConfirm}
+      trigger={<Button block variant="ghost">Weggooien</Button>}
+    />
   )
 }
 
@@ -129,20 +167,26 @@ function Login({ onDone }: { onDone: (s: auth.Session) => void }) {
   }
   return (
     <Container size="narrow">
-      <form onSubmit={submit}>
-        <Stack gap={6}>
-          <Heading level={2}>Inloggen</Heading>
-          {err && <Alert tone="danger">{err}</Alert>}
-          <Field label="Gebruiker"><Input value={user} onChange={(e) => setUser(e.target.value)} autoCapitalize="none" autoComplete="username" /></Field>
-          <Field label="Wachtwoord"><PasswordInput value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" /></Field>
-          <Button type="submit" block loading={busy}>Inloggen</Button>
-        </Stack>
-      </form>
+      <Stack gap={8}>
+        {/* own centred Stack: the column's default stretch would distort the logo */}
+        <Stack align="center"><Logo src={logo} /></Stack>
+        <Window path={['Notes', 'Inloggen']}>
+          <form onSubmit={submit}>
+            <Stack gap={6}>
+              {err && <Alert tone="danger">{err}</Alert>}
+              <Field label="Gebruiker" required><Input value={user} onChange={(e) => setUser(e.target.value)} autoCapitalize="none" autoComplete="username" /></Field>
+              <Field label="Wachtwoord" required><PasswordInput value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="current-password" /></Field>
+              <Button type="submit" variant="accent" block loading={busy}>Inloggen</Button>
+            </Stack>
+          </form>
+        </Window>
+      </Stack>
     </Container>
   )
 }
 
-// Comma-separated list; keeps its own text so typing "a, " is not reformatted mid-word.
+// shortcut: own comma field instead of the design system's TagInput, which drops unconfirmed text on save
+// and relies on a ',' keydown that Android keyboards often do not send; switch once TagInput handles both.
 function ListField({ label, value, onChange }: { label: string; value?: string[]; onChange: (v: string[]) => void }) {
   const [text, setText] = useState(value?.join(', ') ?? '')
   return (
@@ -174,35 +218,40 @@ function Review({ draft, onSave, onShare, onTranslate, onCancel }: {
     setTranslating(false)
   }
   return (
-    <Stack gap={6}>
-      <Heading level={2}>Controleer en bewaar</Heading>
-      <Field label="Soort"><Select options={MODE_OPTIONS} value={d.mode} onValueChange={(mode) => set({ mode: mode as Mode })} aria-label="Soort" /></Field>
-      <Field label="Titel"><Input value={d.title} onChange={(e) => set({ title: e.target.value })} /></Field>
-      {d.mode === 'task' ? (
-        <>
-          <Field label="Status"><Input value={d.status ?? 'Not started'} onChange={(e) => set({ status: e.target.value })} /></Field>
-          <Field label="Prioriteit"><Select options={PRIO_OPTIONS} value={d.prio ?? 'Medium'} onValueChange={(prio) => set({ prio })} aria-label="Prioriteit" /></Field>
-          <Field label="Deadline"><Input type="date" value={d.deadline ?? ''} onChange={(e) => set({ deadline: e.target.value || undefined })} /></Field>
-          <ListField label="Categorie" value={d.category} onChange={(category) => set({ category })} />
-          <ListField label="Toegewezen aan" value={d.assigned_to} onChange={(assigned_to) => set({ assigned_to })} />
-        </>
-      ) : (
-        <>
-          <Field label="Datum"><Input type="date" value={d.date ?? today()} onChange={(e) => set({ date: e.target.value || undefined })} /></Field>
-          <Field label="Status"><Input value={d.status ?? 'not processed'} onChange={(e) => set({ status: e.target.value })} /></Field>
-          <ListField label="Aanwezigen" value={d.attendees} onChange={(attendees) => set({ attendees })} />
-          <ListField label="Bedrijf" value={d.company} onChange={(company) => set({ company })} />
-        </>
-      )}
-      <Field label="Tekst"><Textarea rows={14} value={d.body} onChange={(e) => set({ body: e.target.value })} /></Field>
-      <Button block variant="secondary" icon={<Languages aria-hidden />} loading={translating} disabled={!d.body.trim()} onClick={toEnglish}>Vertaal naar Engels</Button>
-      <Field label="Obsidian-vault" hint="Precies zoals de vault in Obsidian heet; wordt onthouden">
-        <Input value={vault} onChange={(e) => setVault(e.target.value)} autoCapitalize="none" />
-      </Field>
-      {/* onSave must run synchronously in this tap: browsers only open app links from a user gesture */}
-      <Button block loading={busy} disabled={!d.title.trim() || !vault.trim() || translating} onClick={async () => (setBusy(true), await onSave(d, vault.trim()), setBusy(false))}>Bewaar in Obsidian</Button>
-      <Button block variant="secondary" disabled={!d.title.trim()} onClick={() => onShare(d)}>Deel als bestand</Button>
-      <Button block variant="ghost" onClick={onCancel}>Weggooien</Button>
-    </Stack>
+    <Window path={['Notes', label(d.mode), 'Controle']}>
+      <Stack gap={6}>
+        <Field label="Soort"><SegmentedControl options={MODE_OPTIONS} value={d.mode} onValueChange={(mode) => set({ mode: mode as Mode })} aria-label="Soort" /></Field>
+        <Field label="Titel" required><Input value={d.title} onChange={(e) => set({ title: e.target.value })} /></Field>
+        {d.mode === 'task' ? (
+          <>
+            <Field label="Status"><Input value={d.status ?? 'Not started'} onChange={(e) => set({ status: e.target.value })} /></Field>
+            <Field label="Prioriteit">
+              <NativeSelect value={d.prio ?? 'Medium'} onChange={(e) => set({ prio: e.target.value })}>
+                {PRIOS.map((p) => <option key={p} value={p}>{p}</option>)}
+              </NativeSelect>
+            </Field>
+            <Field label="Deadline"><Input type="date" value={d.deadline ?? ''} onChange={(e) => set({ deadline: e.target.value || undefined })} /></Field>
+            <ListField label="Categorie" value={d.category} onChange={(category) => set({ category })} />
+            <ListField label="Toegewezen aan" value={d.assigned_to} onChange={(assigned_to) => set({ assigned_to })} />
+          </>
+        ) : (
+          <>
+            <Field label="Datum"><Input type="date" value={d.date ?? today()} onChange={(e) => set({ date: e.target.value || undefined })} /></Field>
+            <Field label="Status"><Input value={d.status ?? 'not processed'} onChange={(e) => set({ status: e.target.value })} /></Field>
+            <ListField label="Aanwezigen" value={d.attendees} onChange={(attendees) => set({ attendees })} />
+            <ListField label="Bedrijf" value={d.company} onChange={(company) => set({ company })} />
+          </>
+        )}
+        <Field label="Tekst"><Textarea rows={14} value={d.body} onChange={(e) => set({ body: e.target.value })} /></Field>
+        <Button block variant="secondary" icon={<Languages aria-hidden />} loading={translating} disabled={!d.body.trim()} onClick={toEnglish}>Vertaal naar Engels</Button>
+        <Field label="Obsidian-vault" hint="Precies zoals de vault in Obsidian heet; wordt onthouden" required>
+          <Input value={vault} onChange={(e) => setVault(e.target.value)} autoCapitalize="none" />
+        </Field>
+        {/* onSave must run synchronously in this tap: browsers only open app links from a user gesture */}
+        <Button block variant="accent" loading={busy} disabled={!d.title.trim() || !vault.trim() || translating} onClick={async () => (setBusy(true), await onSave(d, vault.trim()), setBusy(false))}>Bewaar in Obsidian</Button>
+        <Button block variant="secondary" disabled={!d.title.trim()} onClick={() => onShare(d)}>Deel als bestand</Button>
+        <Discard what="notitie" onConfirm={onCancel} />
+      </Stack>
+    </Window>
   )
 }
