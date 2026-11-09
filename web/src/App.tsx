@@ -1,8 +1,8 @@
 import { useRef, useState } from 'react'
 import { AppShell, MobileHeader, IconButton, Button, Stack, Container, Field, Input, PasswordInput, Textarea, Select, Alert, Text, Heading, Spinner } from '@damage-control/ui'
-import { LogOut, Mic, Square, FileText, ListChecks, Users } from 'lucide-react'
+import { LogOut, Mic, Square, FileText, ListChecks, Users, Languages } from 'lucide-react'
 import * as auth from './auth.ts'
-import { formatNote, transcribe, Unauthorized } from './ai.ts'
+import { formatNote, transcribe, translate, Unauthorized } from './ai.ts'
 import { startRecording } from './recorder.ts'
 import { savedVault, shareFile, toObsidian } from './save.ts'
 import { PRIOS, type Draft, type Mode } from './notes.ts'
@@ -107,6 +107,7 @@ export function App() {
               onCancel={() => setView({ name: 'home' })}
               onSave={(d, vault) => toObsidian(vault, d).then((path) => setView({ name: 'home', saved: path }), guard)}
               onShare={(d) => shareFile(d).catch(guard)}
+              onTranslate={(d) => (setError(''), translate(session.key, d).catch(guard))}
             />
           )}
         </Stack>
@@ -141,32 +142,65 @@ function Login({ onDone }: { onDone: (s: auth.Session) => void }) {
   )
 }
 
-function Review({ draft, onSave, onShare, onCancel }: { draft: Draft; onSave: (d: Draft, vault: string) => Promise<unknown>; onShare: (d: Draft) => Promise<unknown>; onCancel: () => void }) {
+// Comma-separated list; keeps its own text so typing "a, " is not reformatted mid-word.
+function ListField({ label, value, onChange }: { label: string; value?: string[]; onChange: (v: string[]) => void }) {
+  const [text, setText] = useState(value?.join(', ') ?? '')
+  return (
+    <Field label={label} hint="Gescheiden met komma's">
+      <Input value={text} onChange={(e) => (setText(e.target.value), onChange(e.target.value.split(',').map((s) => s.trim()).filter(Boolean)))} />
+    </Field>
+  )
+}
+
+const MODE_OPTIONS = MODES.map(({ mode, label }) => ({ value: mode, label }))
+const today = () => new Date().toISOString().slice(0, 10)
+
+function Review({ draft, onSave, onShare, onTranslate, onCancel }: {
+  draft: Draft
+  onSave: (d: Draft, vault: string) => Promise<unknown>
+  onShare: (d: Draft) => Promise<unknown>
+  onTranslate: (d: Draft) => Promise<Pick<Draft, 'title' | 'body'> | void>
+  onCancel: () => void
+}) {
   const [d, setD] = useState(draft)
   const [vault, setVault] = useState(savedVault)
   const [busy, setBusy] = useState(false)
+  const [translating, setTranslating] = useState(false)
   const set = (p: Partial<Draft>) => setD((x) => ({ ...x, ...p }))
+  const toEnglish = async () => {
+    setTranslating(true)
+    const t = await onTranslate(d)
+    if (t) set(t)
+    setTranslating(false)
+  }
   return (
     <Stack gap={6}>
       <Heading level={2}>Controleer en bewaar</Heading>
+      <Field label="Soort"><Select options={MODE_OPTIONS} value={d.mode} onValueChange={(mode) => set({ mode: mode as Mode })} aria-label="Soort" /></Field>
       <Field label="Titel"><Input value={d.title} onChange={(e) => set({ title: e.target.value })} /></Field>
-      {d.mode === 'task' && (
+      {d.mode === 'task' ? (
         <>
+          <Field label="Status"><Input value={d.status ?? 'Not started'} onChange={(e) => set({ status: e.target.value })} /></Field>
           <Field label="Prioriteit"><Select options={PRIO_OPTIONS} value={d.prio ?? 'Medium'} onValueChange={(prio) => set({ prio })} aria-label="Prioriteit" /></Field>
           <Field label="Deadline"><Input type="date" value={d.deadline ?? ''} onChange={(e) => set({ deadline: e.target.value || undefined })} /></Field>
+          <ListField label="Categorie" value={d.category} onChange={(category) => set({ category })} />
+          <ListField label="Toegewezen aan" value={d.assigned_to} onChange={(assigned_to) => set({ assigned_to })} />
+        </>
+      ) : (
+        <>
+          <Field label="Datum"><Input type="date" value={d.date ?? today()} onChange={(e) => set({ date: e.target.value || undefined })} /></Field>
+          <Field label="Status"><Input value={d.status ?? 'not processed'} onChange={(e) => set({ status: e.target.value })} /></Field>
+          <ListField label="Aanwezigen" value={d.attendees} onChange={(attendees) => set({ attendees })} />
+          <ListField label="Bedrijf" value={d.company} onChange={(company) => set({ company })} />
         </>
       )}
-      {d.mode === 'meeting' && (
-        <Field label="Aanwezigen" hint="Gescheiden met komma's">
-          <Input defaultValue={d.attendees?.join(', ')} onChange={(e) => set({ attendees: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} />
-        </Field>
-      )}
       <Field label="Tekst"><Textarea rows={14} value={d.body} onChange={(e) => set({ body: e.target.value })} /></Field>
+      <Button block variant="secondary" icon={<Languages aria-hidden />} loading={translating} disabled={!d.body.trim()} onClick={toEnglish}>Vertaal naar Engels</Button>
       <Field label="Obsidian-vault" hint="Precies zoals de vault in Obsidian heet; wordt onthouden">
         <Input value={vault} onChange={(e) => setVault(e.target.value)} autoCapitalize="none" />
       </Field>
       {/* onSave must run synchronously in this tap: browsers only open app links from a user gesture */}
-      <Button block loading={busy} disabled={!d.title.trim() || !vault.trim()} onClick={async () => (setBusy(true), await onSave(d, vault.trim()), setBusy(false))}>Bewaar in Obsidian</Button>
+      <Button block loading={busy} disabled={!d.title.trim() || !vault.trim() || translating} onClick={async () => (setBusy(true), await onSave(d, vault.trim()), setBusy(false))}>Bewaar in Obsidian</Button>
       <Button block variant="secondary" disabled={!d.title.trim()} onClick={() => onShare(d)}>Deel als bestand</Button>
       <Button block variant="ghost" onClick={onCancel}>Weggooien</Button>
     </Stack>

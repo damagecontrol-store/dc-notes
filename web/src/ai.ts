@@ -68,3 +68,15 @@ export async function formatNote(key: string, mode: Mode, transcript: string): P
   const j = JSON.parse(raw) as Partial<Draft>
   return { mode, title: String(j.title ?? 'Untitled'), body: String(j.body ?? transcript), prio: j.prio, deadline: j.deadline, attendees: j.attendees }
 }
+
+// Translates the reviewed text, not the raw transcript, so edits made in the form survive.
+export async function translate(key: string, d: Draft): Promise<Pick<Draft, 'title' | 'body'>> {
+  const raw = await chat(
+    key,
+    FORMAT_MODEL,
+    `Vertaal deze notitie naar het Engels. Behoud de markdown, "- [ ]" checklijsten, [[links]] en namen precies; verzin niets. Antwoord alleen met JSON: {"title": vertaalde titel, "body": vertaalde tekst}\n\n${JSON.stringify({ title: d.title, body: d.body })}`,
+    true,
+  )
+  const j = JSON.parse(raw) as Partial<Draft>
+  return { title: String(j.title ?? d.title), body: String(j.body ?? d.body) }
+}

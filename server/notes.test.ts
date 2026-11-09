@@ -33,3 +33,15 @@ test('save never overwrites', async () => {
   assert.equal(b, 'Notebook/Idee 2.md')
   assert.match(await readFile(join(v, a), 'utf8'), /een/)
 })
+
+test('edited review fields land in the frontmatter', () => {
+  const t = render({ mode: 'task', title: 'x', body: '', status: 'In progress', category: ['Branding'], assigned_to: ['Joël', '[[Ertugrul]]'] }, 'd')
+  assert.match(t, /status: In progress/)
+  assert.match(t, /category:\n {2}- "Branding"/)
+  assert.match(t, /assigned_to:\n {2}- "\[\[Joël\]\]"\n {2}- "\[\[Ertugrul\]\]"/)
+  const n = render({ mode: 'note', title: 'x', body: '', date: '2026-11-01', company: ['MXIO'], status: 'a: b\nc' }, '2026-11-09')
+  assert.match(n, /date: 2026-11-01/)
+  assert.match(n, /company:\n {2}- "MXIO"/)
+  assert.match(n, /status: "a: b\\nc"/) // free text cannot break the yaml
+  assert.match(render({ mode: 'note', title: 'x', body: '', date: 'gisteren' }, '2026-11-09'), /date: 2026-11-09/)
+})
