@@ -1,0 +1,33 @@
+{
+  "name": "dc-notes",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file=.env --watch server/index.ts",
+    "start": "node --env-file=.env server/index.ts",
+    "test": "node --test server/*.test.ts scripts/*.test.ts web/src/*.test.ts",
+    "keys": "node --env-file=.env scripts/keys.ts",
+    "deploy": "sh scripts/deploy.sh",
+    "hash": "node server/hash.ts",
+    "build": "vite build",
+    "web:dev": "vite",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "hono": "^4",
+    "@hono/node-server": "^1",
+    "react": "^19",
+    "react-dom": "^19",
+    "lucide-react": "^1.68.0",
+    "@damage-control/ui": "file:../DC-design-system"
+  },
+  "devDependencies": {
+    "vite": "^8.3.5",
+    "@vitejs/plugin-react": "^6.2.1",
+    "vite-plugin-pwa": "^1",
+    "typescript": "^7.0.2",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/node": "^24"
+  }
+}
